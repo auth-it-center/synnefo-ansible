@@ -34,30 +34,46 @@ description:
 options:
    url:
      description:
-        - Authentication url of specific synnefo infrastructure
-     required: true
+      - Authentication url of specific synnefo infrastructure
      default: 'https://accounts.okeanos.grnet.gr/identity/v2.0'
    token:
      description:
-        - Security token to authenticate specific user
-     required: true
+      - Security token to authenticate specific user
    name:
      description:
-        - Virtual Machine's name
-     required: true
+      - Virtual Machine's name
+   id:
+     description:
+      - Virtual Machine's id number 
+   image:
+     description:
+      - Virtual Machine's image name
    image_id:
      description:
-        - Id of virtual machine image
-     required: true
+      - Virtual Machine's image id number
+   flavor:
+     description:
+      - Virtual Machine's flavor name
    flavor_id:
      description:
-        - Virtual Machine's flavor id
-     required: true
-     default: 4
+      - Virtual Machine's flavor id number
+   core:
+     description:
+      - Number of Virtual Cores in the desired flavor
+   ram:
+     description:
+      - Amount of ram (MB/GB) in the desired flavor 
+   hdd:
+     description:
+      - Amount of hard drive (GB) space in the desired flavor 
+   dtype:
+     description:
+      - Type of disk to be used in the desired flavor
+      choices: ['drbd','ext_vlmc']
    state:
      description:
-        - Indicate desired state of the resource
-     choices: ['present', 'absent']
+      - Indicate desired state of the vm 
+     choices: ['present','absent','active','stopped']
      default: present
 requirements: ["kamakiclient"]
 '''
@@ -221,17 +237,24 @@ def snf_create_vm(module,cyclades):
     except ClientError:
         module.fail_json(msg = "Cyclades: VM creation failed: %s" % ClientError.message)
    
-    module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'], msg="vm is getting ready...")
- 
     if (module.params['wait'] == True):
         res_state = cyclades.wait_for(vm_born['id'],'ACTIVE',progress_placeholder) 
         module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'], msg="vm is now ready!")
+
+    module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'], msg="vm is getting ready...")
+
 
 def snf_delete_vm(module,cyclades,vm_id):
 
     try:
         cyclades.delete_server(vm_id)
+
+        if ( module.params['wait'] == True ):
+	    res_state = cyclades.wait_for(vm_id,'DELETED',progress_placeholder)
+	    module.exit_json(changed = True, msg="VM:%s is now deleted!" % vm_id)
+	
 	module.exit_json(changed = True, msg="deleting vm with id:%s ..." % vm_id)
+
     except ClientError:
 	module.fail_json(msg="Cyclades: Error deleting VM")
 
@@ -243,7 +266,7 @@ def main():
     module = AnsibleModule(
         argument_spec                   = dict(
         url                             = dict(default='https://accounts.okeanos.grnet.gr/identity/v2.0'),
-        token                           = dict(),
+        token                           = dict(required=True),
         name                            = dict(),
         id				= dict(type='int'),
         image                           = dict(),
@@ -255,7 +278,7 @@ def main():
         core				= dict(),
         ram				= dict(),
         hdd                             = dict(),
-        dtype                           = dict(),
+        dtype                           = dict(choices=['drbd','ext_vlmc']),
         state                           = dict(default='present', choices=['absent', 'present','stopped','active'])
         ),
         required_together = (
