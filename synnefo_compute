@@ -21,6 +21,7 @@ try:
     from kamaki.clients import ClientError
     from kamaki.clients.astakos import AstakosClient
     from kamaki.clients.cyclades import CycladesClient
+    from kamaki.cli import logging
 except ImportError:
     print "Kamaki Client has to be installed to use this module"
 
@@ -68,7 +69,7 @@ options:
       - Amount of hard drive (GB) space in the desired flavor 
    dtype:
      description:
-      - Type of disk to be used in the desired flavor
+      - Type of disk template to be used in the desired flavor
       choices: ['drbd','ext_vlmc']
    state:
      description:
@@ -101,11 +102,11 @@ def get_image_id(module,cyclades,img_name):
         return 0
       
     except ClientError:
-        module.fail_json("Cyclades: Image Listing Error");      
+	    module.fail_json(msg="Cyclades: Image Listing Error")      
 
 
 # Okeanos default flavors naming convention
-def gen_flavor_name(cores,ram,disk,dtype):
+def ram_conform(ram):
     # Check if user specifed ram using single digit
     if (ram==1): ram = 1024
     elif (ram==2): ram = 2048
@@ -113,7 +114,29 @@ def gen_flavor_name(cores,ram,disk,dtype):
     elif (ram==6): ram = 6144
     elif (ram==8): ram = 8192
     
-    return "C" + str(cores) + "R" + str(ram) + "D" + str(disk) + str(dtype)
+    return ram
+
+def spec_flavor_id(module,cyclades):
+    try:
+	f_list = cyclades.list_flavors(detail=True)
+	
+	f_vcpus = module.params['vcpus']
+	f_ram = module.params['ram']
+	f_disk = module.params['disk']
+	f_dtype = module.params['dtype']
+        
+        f_ram = ram_conform(f_ram)
+
+	for f_item in f_list:
+	    if (f_item['SNF:disk_template'] == f_dtype):
+	        if (f_item['vcpus'] == f_vcpus):
+                    if (f_item['ram'] == f_ram):
+	                if (f_item['disk'] == f_disk):
+			    return f_item['id']
+            
+        module.fail_json(msg="No such flavour found!",vcpus=f_vcpus,ram=f_ram,disk=f_disk,dtype=f_dtype)
+    except ClientError: 
+        module.fail_json(msg="Cyclades: Flavor listing failed!") 
 
 
 # Get flavor id from machine parameters (okeanos default flavors)
@@ -126,8 +149,7 @@ def get_flavor_id(module,cyclades,fname):
             
         module.fail_json(msg = "flavor not found!")
     except ClientError:
-        module.fail_json(msg = "Cyclades: Listing Flavors failed: %s" % ClientError.message)                        
-
+        module.fail_json(msg = "Cyclades: Listing Flavors failed!")                        
 
 def progress_placeholder(state,progress):
     return (None,None)
@@ -138,7 +160,7 @@ def snf_get_state(module,cyclades,vm_id):
         res = cyclades.get_server_details(vm_id)
         
     except ClientError:
-        module.fail_json(msg = "Cyclades: VM state inquiry failed: %s" % ClientError.message)
+        module.fail_json(msg = "Cyclades: VM state inquiry failed!")
     
     return res
 
@@ -154,7 +176,7 @@ def snf_stop_vm(module,cyclades,vm_id):
             res_state = cyclades.wait_for(vm_id,'STOPPED',progress_placeholder)    
             module.exit_json(changed=True,vm_name=module.params['name'],vm_id=vm_id,msg="vm is now stopped!")
     except ClientError:
-        module.fail_json(msg = "Cyclades: VM stop action failed: %s" % ClientError.message) 
+        module.fail_json(msg = "Cyclades: VM stop action failed!") 
 
 
 def snf_start_vm(module,cyclades,vm_id):
@@ -167,7 +189,7 @@ def snf_start_vm(module,cyclades,vm_id):
             res_state = cyclades.wait_for(vm_id,'ACTIVE',progress_placeholder)    
             module.exit_json(changed=True,vm_name=module.params['name'],vm_id=vm_id,msg="vm is now active!")
     except ClientError:
-        module.fail_json(msg = "Cyclades: VM stop action failed: %s" % ClientError.message)
+        module.fail_json(msg = "Cyclades: VM stop action failed!" )
 
 
 def snf_search_vm(module,cyclades):
@@ -185,7 +207,7 @@ def snf_search_vm(module,cyclades):
 		    return vm_item['id']
     
     except ClientError:
-        module.fail_json(msg = "Cyclades: VM list action failed: %s" % ClientError.message)
+        module.fail_json(msg = "Cyclades: VM list action failed")
     return 0
   
 
@@ -203,10 +225,9 @@ def snf_create_vm(module,cyclades):
     if module.params['flavor_id']:
         vm_flavor = module.params['flavor_id']
     elif  module.params['flavor']:
-        vm_flavor = get_flavor_id(module,cyclades,module.params['flavor'])
-    elif module.params['core']:
-        generated_name = gen_flavor_name(module.params['core'],module.params['ram'],module.params['hdd'],module.params['dtype'])
-	vm_flavor = get_flavor_id(module,cyclades,generated_name)
+        vm_flavor = get_flavor_id(module,cyclades)
+    elif module.params['vcpus']:
+	vm_flavor = spec_flavor_id(module,cyclades)
     else:
        module.fail_json(msg= "Arguments: flavor or flavor_id or ( core,ram,hdd and dtype) required!")
 	
@@ -235,7 +256,7 @@ def snf_create_vm(module,cyclades):
         else:
 	    vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image)
     except ClientError:
-        module.fail_json(msg = "Cyclades: VM creation failed: %s" % ClientError.message)
+        module.fail_json(msg = "Cyclades: VM creation failed")
    
     if (module.params['wait'] == True):
         res_state = cyclades.wait_for(vm_born['id'],'ACTIVE',progress_placeholder) 
@@ -275,28 +296,28 @@ def main():
         flavor_id                       = dict(),
         sshkey				= dict(),
         wait				= dict(type='bool',choices=BOOLEANS,default='yes'),
-        core				= dict(),
-        ram				= dict(),
-        hdd                             = dict(),
+        vcpus				= dict(type='int'),
+        ram				= dict(type='int'),
+        disk                            = dict(type='int'),
         dtype                           = dict(choices=['drbd','ext_vlmc']),
         state                           = dict(default='present', choices=['absent', 'present','stopped','active'])
         ),
         required_together = (
 
- 		['core','ram','hdd','dtype'],
+ 		['vcpus','ram','disk','dtype'],
         ),
         mutually_exclusive = ( 
 
 		['id','name'],
 		['image','image_id'],
 		['flavor','flavor_id'],
-		['flavor','core'],
+		['flavor','vcpus'],
 		['flavor','ram'],
-		['flavor','hdd'],
+		['flavor','disk'],
 		['flavor','dtype'],
-		['flavor_id','core'],
+		['flavor_id','vcpus'],
 		['flavor_id','ram'],
-		['flavor_id','hdd'],
+		['flavor_id','disk'],
 		['flavor_id','dtype'],
 	
         ),
@@ -313,24 +334,26 @@ def main():
     auth_url = module.params['url']
     auth_token = module.params['token']
 
+    # Disable DEBUG logging, important for ansible to parse raw output properly
+    logging.disable('DEBUG')
     # Initialize Astakos Client & Authenticate User
     try:
         astakos = AstakosClient(auth_url,auth_token)
         astakos.authenticate()
     except ClientError:
-         module.fail_json(msg = "Astakos Client initialization failed: %s" % ClientError.message)
+         module.fail_json(msg = "Astakos Client initialization failed")
         
     # Retrieve Cyclades Endpoint
     try:
         cyclades_endpoint = astakos.get_service_endpoints('compute')
         cyclades_url = cyclades_endpoint['publicURL']
     except ClientError:
-        module.fail_json(msg = "Cyclades api endpoint retrieval failed: %s" % ClientError.message)
+        module.fail_json(msg = "Cyclades api endpoint retrieval failed")
     # Initialize Cyclades Client
     try:
         cyclades = CycladesClient(cyclades_url,auth_token)
     except ClientError:
-         module.fail_json(msg = "Cyclades Client initialization failed: %s" % ClientError.message)
+         module.fail_json(msg = "Cyclades Client initialization failed")
         
     # Try to Create The Virtual Machine    
     if (module.params['state'] == 'present'):
