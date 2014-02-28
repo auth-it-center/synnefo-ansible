@@ -16,7 +16,7 @@
 # limitations under the License.
 
 from base64 import b64encode
-
+import time
 try:
     from kamaki.clients import ClientError
     from kamaki.clients.astakos import AstakosClient
@@ -58,19 +58,19 @@ options:
    flavor_id:
      description:
       - Virtual Machine's flavor id number
-   core:
+   vcpus:
      description:
       - Number of Virtual Cores in the desired flavor
    ram:
      description:
       - Amount of ram (MB/GB) in the desired flavor 
-   hdd:
+   disk:
      description:
       - Amount of hard drive (GB) space in the desired flavor 
    dtype:
      description:
       - Type of disk template to be used in the desired flavor
-      choices: ['drbd','ext_vlmc']
+     choices: ['drbd','ext_vlmc']
    state:
      description:
       - Indicate desired state of the vm 
@@ -79,7 +79,72 @@ options:
 requirements: ["kamakiclient"]
 '''
 
-def get_image_id(module,cyclades,img_name):
+EXAMPLES = '''
+# Create a new VM 
+
+   synnefo_compute:
+      name=my_brand_new_vm
+      state=present
+      wait=yes
+      flavor_id=4
+      image='Fedora'
+      auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
+      token='myApIaCcEssToKen'
+
+# Shutdown a VM
+
+   synnefo_compute:
+      name=my_running_vm
+      state=stopped
+      wait=yes
+      auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
+      token='myApIaCcEssToKen'
+
+# Start a VM
+
+   synnefo_compute:
+      name=my_stopped_vm
+      state=active
+      wait=yes
+      auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
+      token='myApIaCcEssToKen'
+
+ #Delete a VM
+
+   synnefo_compute:
+      name=my_loved_vm
+      state=absent
+      wait=yes
+      auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
+      token='myApIaCcEssToKen'
+
+# Create a VM and provide specs
+
+   synnefo_compute:
+      name=vm_with_specs
+      state=present
+      image='Ubuntu Server'
+      vcpus=1
+      ram=1024
+      disk=20
+      dtype=drdb
+      wait=yes
+      auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
+      token='myApIaCcEssToKen'
+'''
+
+def snf_wait_pending(module,cyclades,vm_id):
+
+    try:
+        pending = cyclades.get_server_details(vm_id)['SNF:task_state']
+        while (pending != ''):
+            time.sleep(3)
+            pending = cyclades.get_server_details(vm_id)['SNF:task_state']
+
+    except ClientError as e:
+        module.fail_json(msg="Cyclades: wait for pending task failed",msg_details=e.message)
+
+def snf_get_image_id(module,cyclades,img_name):
     # Obtain list of images
     exact = []
     similar = []
@@ -101,12 +166,12 @@ def get_image_id(module,cyclades,img_name):
 	
         return 0
       
-    except ClientError:
-	    module.fail_json(msg="Cyclades: Image Listing Error")      
+    except ClientError as e:
+	    module.fail_json(msg="Cyclades: Image Listing Error", msg_details=e.message)      
 
 
 # Okeanos default flavors naming convention
-def ram_conform(ram):
+def snf_ram_conform(ram):
     # Check if user specifed ram using single digit
     if (ram==1): ram = 1024
     elif (ram==2): ram = 2048
@@ -116,7 +181,7 @@ def ram_conform(ram):
     
     return ram
 
-def spec_flavor_id(module,cyclades):
+def snf_spec_flavor_id(module,cyclades):
     try:
 	f_list = cyclades.list_flavors(detail=True)
 	
@@ -125,7 +190,7 @@ def spec_flavor_id(module,cyclades):
 	f_disk = module.params['disk']
 	f_dtype = module.params['dtype']
         
-        f_ram = ram_conform(f_ram)
+        f_ram = snf_ram_conform(f_ram)
 
 	for f_item in f_list:
 	    if (f_item['SNF:disk_template'] == f_dtype):
@@ -135,12 +200,12 @@ def spec_flavor_id(module,cyclades):
 			    return f_item['id']
             
         module.fail_json(msg="No such flavour found!",vcpus=f_vcpus,ram=f_ram,disk=f_disk,dtype=f_dtype)
-    except ClientError: 
-        module.fail_json(msg="Cyclades: Flavor listing failed!") 
+    except ClientError as e: 
+        module.fail_json(msg="Cyclades: Flavor listing failed!",msg_details = e.message) 
 
 
 # Get flavor id from machine parameters (okeanos default flavors)
-def get_flavor_id(module,cyclades,fname):
+def snf_get_flavor_id(module,cyclades,fname):
     try:
         flist = cyclades.list_flavors()
         for fitem in flist:
@@ -148,10 +213,10 @@ def get_flavor_id(module,cyclades,fname):
                 return  fitem['id']
             
         module.fail_json(msg = "flavor not found!")
-    except ClientError:
-        module.fail_json(msg = "Cyclades: Listing Flavors failed!")                        
+    except ClientError as e:
+        module.fail_json(msg = "Cyclades: Listing Flavors failed!", msg_details = e.message)                        
 
-def progress_placeholder(state,progress):
+def snf_progress_placeholder(state,progress):
     return (None,None)
 
 
@@ -159,8 +224,8 @@ def snf_get_state(module,cyclades,vm_id):
     try:
         res = cyclades.get_server_details(vm_id)
         
-    except ClientError:
-        module.fail_json(msg = "Cyclades: VM state inquiry failed!")
+    except ClientError as e :
+        module.fail_json(msg = "Cyclades: VM state inquiry failed!", msg_details = e.message)
     
     return res
 
@@ -173,10 +238,11 @@ def snf_stop_vm(module,cyclades,vm_id):
         if (module.params['wait'] == False):
             module.exit_json(changed=True,vm_name=module.params['name'],vm_id=vm_id,msg="vm is stopping...")
         else:
-            res_state = cyclades.wait_for(vm_id,'STOPPED',progress_placeholder)    
+            #cyclades.wait_for(vm_id,'STOPPED',snf_progress_placeholder,1,1200)
+            snf_wait_pending(module,cyclades,vm_id)    
             module.exit_json(changed=True,vm_name=module.params['name'],vm_id=vm_id,msg="vm is now stopped!")
-    except ClientError:
-        module.fail_json(msg = "Cyclades: VM stop action failed!") 
+    except ClientError as e :
+        module.fail_json(msg = "Cyclades: VM stop action failed!", msg_details = e.message) 
 
 
 def snf_start_vm(module,cyclades,vm_id):
@@ -186,10 +252,11 @@ def snf_start_vm(module,cyclades,vm_id):
     	if (module.params['wait'] == False):
             module.exit_json(changed=True,vm_name=module.params['name'],vm_id=vm_id,msg="vm is booting...")
     	else:
-            res_state = cyclades.wait_for(vm_id,'ACTIVE',progress_placeholder)    
+            #cyclades.wait_for(vm_id,'ACTIVE',snf_progress_placeholder,1,1200)
+            snf_wait_pending(module,cyclades,vm_id)
             module.exit_json(changed=True,vm_name=module.params['name'],vm_id=vm_id,msg="vm is now active!")
-    except ClientError:
-        module.fail_json(msg = "Cyclades: VM stop action failed!" )
+    except ClientError as e :
+        module.fail_json(msg = "Cyclades: VM start action failed!" , msg_details = e.message)
 
 
 def snf_search_vm(module,cyclades):
@@ -206,30 +273,30 @@ def snf_search_vm(module,cyclades):
 	        if (vm_item['name'] == query_name):
 		    return vm_item['id']
     
-    except ClientError:
-        module.fail_json(msg = "Cyclades: VM list action failed")
+    except ClientError as e :
+        module.fail_json(msg = "Cyclades: VM list action failed", msg_details = e.message)
     return 0
   
 
 def snf_create_vm(module,cyclades):
-    
+
     vm_name = module.params['name']
     
     if module.params['image_id']:
         vm_image = module.params['image_id']
     elif module.params['image']:
-	vm_image = get_image_id(module,cyclades,module.params['image'])
+        vm_image = snf_get_image_id(module,cyclades,module.params['image'])
     else:
         module.fail_json(msg= "Arguments: image or image_id required!")
 
     if module.params['flavor_id']:
         vm_flavor = module.params['flavor_id']
     elif  module.params['flavor']:
-        vm_flavor = get_flavor_id(module,cyclades)
+        vm_flavor = snf_get_flavor_id(module,cyclades)
     elif module.params['vcpus']:
-	vm_flavor = spec_flavor_id(module,cyclades)
+        vm_flavor = snf_spec_flavor_id(module,cyclades)
     else:
-       module.fail_json(msg= "Arguments: flavor or flavor_id or ( core,ram,hdd and dtype) required!")
+        module.fail_json(msg= "Arguments: flavor or flavor_id or ( core,ram,hdd and dtype) required!")
 	
     vm_keys = module.params['sshkey']
 
@@ -238,7 +305,7 @@ def snf_create_vm(module,cyclades):
     personality = [] 
 
     if vm_keys:
-	with open(vm_keys) as f:
+        with open(vm_keys) as f:
             personality.append(dict(
                 contents=b64encode(f.read()),
                 path='/root/.ssh/authorized_keys',
@@ -250,20 +317,22 @@ def snf_create_vm(module,cyclades):
     
 
     try:
-    	if vm_keys:
+        if vm_keys:
             vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image,None,personality)
             
         else:
-	    vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image)
-    except ClientError:
-        module.fail_json(msg = "Cyclades: VM creation failed")
-   
-    if (module.params['wait'] == True):
-        res_state = cyclades.wait_for(vm_born['id'],'ACTIVE',progress_placeholder) 
-        module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'], msg="vm is now ready!")
+            vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image)
 
-    module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'], msg="vm is getting ready...")
 
+        if (module.params['wait'] == True):
+            #cyclades.wait_for(vm_born['id'],'ACTIVE',snf_progress_placeholder,1,1200)
+            snf_wait_pending(module,cyclades,vm_born['id'])
+            module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'],  msg="vm is now ready!")
+
+        module.exit_json(changed = True, id = vm_born['id'], admin_pass = vm_born['adminPass'], msg="vm is getting ready...")
+    
+    except ClientError as e:
+        module.fail_json(msg = "Cyclades: VM creation failed", details=e.message)
 
 def snf_delete_vm(module,cyclades,vm_id):
 
@@ -271,13 +340,14 @@ def snf_delete_vm(module,cyclades,vm_id):
         cyclades.delete_server(vm_id)
 
         if ( module.params['wait'] == True ):
-	    res_state = cyclades.wait_for(vm_id,'DELETED',progress_placeholder)
-	    module.exit_json(changed = True, msg="VM:%s is now deleted!" % vm_id)
+            #cyclades.wait_for(vm_id,'DELETED',snf_progress_placeholder,1,1200)
+            snf_wait_pending(module,cyclades,vm_id)
+            module.exit_json(changed = True, msg="VM:%s is now deleted!" % vm_id)
 	
 	module.exit_json(changed = True, msg="deleting vm with id:%s ..." % vm_id)
 
-    except ClientError:
-	module.fail_json(msg="Cyclades: Error deleting VM")
+    except ClientError as e:
+        module.fail_json(msg="Cyclades: Error deleting VM", msg_details = e.message)
 
 
 def main():
@@ -286,7 +356,7 @@ def main():
 
     module = AnsibleModule(
         argument_spec                   = dict(
-        url                             = dict(default='https://accounts.okeanos.grnet.gr/identity/v2.0'),
+        auth_url                        = dict(default='https://accounts.okeanos.grnet.gr/identity/v2.0'),
         token                           = dict(required=True),
         name                            = dict(),
         id				= dict(type='int'),
@@ -326,22 +396,20 @@ def main():
 
 		['id','name'],
 		
-
-	)
+        )
                         
     )
     
-    auth_url = module.params['url']
+    auth_url = module.params['auth_url']
     auth_token = module.params['token']
 
     # Disable DEBUG logging, important for ansible to parse raw output properly
     logging.disable('DEBUG')
     # Initialize Astakos Client & Authenticate User
     try:
-        astakos = AstakosClient(auth_url,auth_token)
-        astakos.authenticate()
+        astakos = AstakosClient(auth_url,auth_token) 
     except ClientError:
-         module.fail_json(msg = "Astakos Client initialization failed")
+        module.fail_json(msg = "Astakos Client initialization failed")
         
     # Retrieve Cyclades Endpoint
     try:
@@ -349,11 +417,12 @@ def main():
         cyclades_url = cyclades_endpoint['publicURL']
     except ClientError:
         module.fail_json(msg = "Cyclades api endpoint retrieval failed")
+
     # Initialize Cyclades Client
     try:
         cyclades = CycladesClient(cyclades_url,auth_token)
     except ClientError:
-         module.fail_json(msg = "Cyclades Client initialization failed")
+        module.fail_json(msg = "Cyclades Client initialization failed")
         
     # Try to Create The Virtual Machine    
     if (module.params['state'] == 'present'):
@@ -362,7 +431,7 @@ def main():
             check_state = snf_get_state(module,cyclades,vm_id)
             module.exit_json(changed=False,vm_name=module.params['name'],vm_id=vm_id,status=check_state["status"],msg="vm already present!")
         else:
-            if (module.params['name']):		
+            if (module.params['name']):
                 snf_create_vm(module, cyclades)
 	    else:
 		module.fail_json(msg="VM with id: %s not found! if you wan't to create a new VM you must specify a name instead" % module.params['id'])
@@ -373,8 +442,10 @@ def main():
             check_state = snf_get_state(module,cyclades,vm_id)
             if (check_state['status'] == 'ACTIVE'):
                 snf_stop_vm(module,cyclades,vm_id)
-            else:
+            elif (check_state['status'] == 'STOPPED'):
                 module.exit_json(changed=False,vm_name=module.params['name'],vm_id=vm_id,status=check_state["status"],msg="vm already stopped!")
+            elif (check_state['status'] == 'BUILD'):
+                module.fail_json(changed=False,vm_name=module.params['name'],vm_id=vm_id,status=check_state["status"],msg="vm in building process!")
         else:
             module.fail_json(msg="%s not found" % module.params['name'])
 
@@ -384,17 +455,19 @@ def main():
             check_state = snf_get_state(module,cyclades,vm_id)
             if (check_state['status'] == 'STOPPED'):
                 snf_start_vm(module,cyclades,vm_id)
-            else: 
+            elif (check_state['status'] == 'ACTIVE'): 
                 module.exit_json(changed=False,vm_name=module.params['name'],vm_id=vm_id,status=check_state["status"],msg="vm already active!")
+            elif (check_state['status'] == 'BUILD'):
+                module.fail_json(changed=False,vm_name=module.params['name'],vm_id=vm_id,status=check_state["status"],msg="vm in building process!")    
         else:
             module.fail_json(msg="%s not found" % module.params['name'])
     
     elif (module.params['state'] == 'absent'):
-	vm_id = snf_search_vm(module,cyclades)
-	if (vm_id):
-           snf_delete_vm(module,cyclades,vm_id)
-	else:
-           module.exit_json(msg="VM with id: %s arleady absent!" % module.params['id'])
+        vm_id = snf_search_vm(module,cyclades)
+        if (vm_id):
+            snf_delete_vm(module,cyclades,vm_id)
+        else:
+            module.exit_json(msg="VM with id: %s arleady absent!" % module.params['id'])
 
     
     
