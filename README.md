@@ -11,7 +11,7 @@ Currently includes:
 synnefo_compute
 ---------------
 
-An Annible module that lets you manage Virtual Machine instances on Synnefo-based infrastructures 
+An Ansible module that lets you manage Virtual Machine instances on Synnefo-based infrastructures 
 
 ### installation
 Module requires Kamaki client be installed.
