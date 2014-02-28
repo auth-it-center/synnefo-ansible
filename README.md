@@ -17,9 +17,9 @@ An Annible module that lets you manage Virtual Machine instances on Synnefo-base
 Module requires Kamaki client be installed.
 Kamaki is the official ~okeanos command line client.
 
-You can download kamaki from the [project homepage]('http://www.synnefo.org/docs/kamaki/latest/index.html')
+You can download kamaki from the [project homepage](http://www.synnefo.org/docs/kamaki/latest/index.html)
 
-Download synnefo_compute source file from [here]('https://github.com/auth-scc/synnefo-ansible/raw/master/synnefo_compute') and place it inside `ansible/library` directory
+Download synnefo_compute source file from [here](https://github.com/auth-scc/synnefo-ansible/raw/master/synnefo_compute) and place it inside `ansible/library` directory
 
 
 ### a first example
