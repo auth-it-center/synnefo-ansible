@@ -27,21 +27,35 @@ Download synnefo_compute source file from [here](https://github.com/auth-scc/syn
 Here's how creating a new VM using synnefo_compute module, looks like:
 
 ```
-# ...Contents of ansible playbook
+---
+# Sample Ansible Playbook 
 # Create a new VM using ansible module: synnefo_compute
 
-   synnefo_compute:
-      name=my_brand_new_vm
-      state=present
-      wait=yes
-      flavor_id=4
-      image='Fedora'
-      auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
-      token='myApIaCcEssToKen'
+ - hosts: example_host 
+   user: example_user  
+   sudo: no
+   gather_facts: no
+
+   tasks:
+
+     - name: Ensure a VM is STOPPED - Shut it down if active
+       delegate_to: 127.0.0.1
+       synnefo_compute:
+          name=my_brand_new_vm
+          state=present
+          wait=yes
+          flavor_id=4
+          image='Fedora'
+          token='myApIaCcEssToKen'
+          auth_url='https://accounts.okeanos.grnet.gr/identity/v2.0'
+
 
 ```
-Let's take a close look at each argument:
 
+Playbooks that use synnefo_compute module can be executed locally.
+In order to execute a task locally use the parameter `delegate_to: 127.0.0.1` (ref. example above). 
+
+Let's take a close look at each argument:
 
 #####name
 
@@ -84,6 +98,12 @@ Refer to a specific image by id, instead of using `image`
 Refer to a specific flavor by name, instead of using `flavor_id`
 #####ssh_key
 Filename of ssh key to be injected during VM's creation process
+
+#####public_network
+During VM creation you can specify a public network in which your VM will try to automatically attach and obtain a floating ip.
++ `public_network=network_id`  -  specify a public network by using it's id integer
++ `public_network=network_cidr` - specify a public network by using it's subnet cidr
++ `public_network=any` - choose automatically an available network
 
 ### query a flavor by specs
 
@@ -151,6 +171,22 @@ After all above arguments are specified, synnefo_compute will query infrastructu
 
 ```
 
+``` 
+#Create a VM and attach it to public network with id:555
+
+synnefo_compute:
+      name=testing_vm_1
+      state=present
+      wait=yes
+      vcpus=1
+      ram=1024
+      disk=20
+      dtype=drbd
+      image='Ubuntu Server'
+      token='myApIaCcEssToKen'
+      auth_url='https://accounts.okeanos.grnet.gr/identity/v2.0'
+      public_network='555'
+```
 
 ### dont forget to...
 check out the exceptional documentation of [Synnefo](http://www.synnefo.org/docs/synnefo/latest/index.html) project and [Ansible](http://docs.ansible.com/)

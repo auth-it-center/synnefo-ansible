@@ -21,6 +21,7 @@ try:
     from kamaki.clients import ClientError
     from kamaki.clients.astakos import AstakosClient
     from kamaki.clients.cyclades import CycladesClient
+    from kamaki.clients.network import NetworkClient
     from kamaki.cli import logging
 except ImportError:
     print "Kamaki Client has to be installed to use this module"
@@ -132,6 +133,124 @@ EXAMPLES = '''
       auth_url='https://accounts.myexamplecloud.local/identity/v2.0'
       token='myApIaCcEssToKen'
 '''
+
+def snf_list_public_networks(module,network):
+    try:
+        result = []
+        net_list = network.list_networks()
+        for item in net_list:
+            if item['SNF:floating_ip_pool'] and item['router:external'] and ['public']:
+                result.append(item['id'])
+
+
+        return result
+    
+    except ClientError as e:
+         module.fail_json(msg="Network: listing of available networks/subnets failed", msg_details=e.message)
+
+
+
+def snf_add_public_network(module,network):
+
+    # if the public_network arg is set as 'any'   
+    if module.params['public_network'] == 'any':
+
+        #look first for available floating ips 
+        floating_ip = snf_available_floating_ip(module,network,None)
+
+
+        #if found available return it
+        if floating_ip:
+            return floating_ip
+        
+        # list public networks
+        pub_net_list = snf_list_public_networks(module,network)
+
+        if not pub_net_list:
+             module.fail_json(msg="Zero public networks found!")
+
+        for item in pub_net_list:
+            #iterate and try to create floating ip
+            floating_ip = snf_create_floating_ip(module,network,item)
+            if floating_ip:
+                return floating_ip
+            
+        module.fail_json(msg="Could not create new floating ip on any available public networks")
+
+    else:
+        # Read public network id argument...
+        public_net_id = module.params['public_network']
+        # ...if not a number then must be cidr of subnet so get the according network_id
+        if public_net_id.isdigit() == False:
+            public_net_id = snf_network_by_cidr(module,network,public_net_id)
+
+        # look for available floating ips in the specified network
+        floating_ip = snf_available_floating_ip(module,network,public_net_id)
+
+        #if found available return it
+        if floating_ip:
+            return floating_ip
+
+        #...else try to create it 
+        floating_ip = snf_create_floating_ip(module,network,public_net_id)
+
+        if floating_ip:
+            return floating_ip
+
+        module.fail_json(msg="Could not create a new floating ip in the specified network")
+
+
+def snf_network_by_cidr(module,network,cidr):
+
+    try: 
+        subnet_list = network.list_subnets()
+
+        for item_subnet in subnet_list:
+            if item_subnet['cidr'] == cidr:
+                return item_subnet['network_id']
+
+        module.fail_json(msg="Network containing subnet with cidr: %s not found!" % cidr)
+
+    except ClientError as e:
+        module.fail_json(msg="Network: listing of available networks/subnets failed", msg_details=e.message)
+
+def snf_available_floating_ip(module,network,network_id):
+    try:
+        floating_list = network.list_floatingips()
+
+        if network_id:
+            for item_floating in floating_list:
+                if item_floating['floating_network_id'] == network_id:
+                    if item_floating['instance_id'] == None:
+                        return item_floating
+        else:
+            for item_floating in floating_list:
+                if item_floating['instance_id'] == None:
+                    return item_floating
+
+        return None
+    except ClientError as e:
+        module.fail_json(msg="Network: listing floating ips failed",msg_details=e.message)
+
+def snf_create_floating_ip(module,network,network_id):
+    try:
+        fl_ip = network.create_floatingip(network_id)
+        return fl_ip
+    except ClientError as e:
+        return None
+
+
+
+
+
+def snf_attach_floating_ip(floating_ip):
+    net = {'uuid':floating_ip['floating_network_id'],'floating_ip_address':floating_ip['floating_ip_address']}
+    net_list = []
+    net_list.append(net)
+    return net_list
+
+
+
 
 def snf_wait_pending(module,cyclades,vm_id):
 
@@ -278,7 +397,7 @@ def snf_search_vm(module,cyclades):
     return 0
   
 
-def snf_create_vm(module,cyclades):
+def snf_create_vm(module,cyclades,network):
 
     vm_name = module.params['name']
     
@@ -299,11 +418,12 @@ def snf_create_vm(module,cyclades):
         module.fail_json(msg= "Arguments: flavor or flavor_id or ( core,ram,hdd and dtype) required!")
 	
     vm_keys = module.params['sshkey']
+    pub_net_arg = module.params['public_network']
 
     # if ssh keys are imported
     # based on specific example from excellent synnefo kamaki api documentation
     personality = [] 
-
+    
     if vm_keys:
         with open(vm_keys) as f:
             personality.append(dict(
@@ -318,10 +438,18 @@ def snf_create_vm(module,cyclades):
 
     try:
         if vm_keys:
-            vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image,None,personality)
+            if pub_net_arg:
+                public_network = snf_attach_floating_ip(snf_add_public_network(module,network))
+                vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image,None,personality,public_network)
+            else:    
+                vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image,None,personality)
             
         else:
-            vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image)
+            if pub_net_arg:
+                public_network = snf_attach_floating_ip(snf_add_public_network(module,network))
+                vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image,None,None,public_network)
+            else:
+                vm_born = cyclades.create_server(vm_name,vm_flavor,vm_image)
 
 
         if (module.params['wait'] == True):
@@ -364,6 +492,7 @@ def main():
         flavor                          = dict(),
         image_id                        = dict(),
         flavor_id                       = dict(),
+        public_network                  = dict(),
         sshkey				= dict(),
         wait				= dict(type='bool',choices=BOOLEANS,default='yes'),
         vcpus				= dict(type='int'),
@@ -423,7 +552,21 @@ def main():
         cyclades = CycladesClient(cyclades_url,auth_token)
     except ClientError:
         module.fail_json(msg = "Cyclades Client initialization failed")
-        
+
+    # Retrieve Network Service Endpoint 
+    try:
+        network_endpoint = astakos.get_service_endpoints('network')
+        network_url = network_endpoint['publicURL']
+    except ClientError:
+        module.fail_json(msg = "Network api endpoint retrieval failed")    
+    
+    # Initialize Network Client
+    try:
+        network = NetworkClient(network_url,auth_token) 
+    except ClientError:
+        module.fail_json(msg= "Network Client initialization failed")
+
+
     # Try to Create The Virtual Machine    
     if (module.params['state'] == 'present'):
         vm_id = snf_search_vm(module,cyclades)
@@ -432,7 +575,7 @@ def main():
             module.exit_json(changed=False,vm_name=module.params['name'],vm_id=vm_id,status=check_state["status"],msg="vm already present!")
         else:
             if (module.params['name']):
-                snf_create_vm(module, cyclades)
+                snf_create_vm(module, cyclades, network)
 	    else:
 		module.fail_json(msg="VM with id: %s not found! if you wan't to create a new VM you must specify a name instead" % module.params['id'])
 
